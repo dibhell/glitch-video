@@ -1,4 +1,4 @@
-name: Build Android Release (Capacitor, signed)
+name: Build Android APK (Capacitor)
 
 on:
   workflow_dispatch:
@@ -23,10 +23,6 @@ on:
         description: "Node.js version"
         required: false
         default: "20"
-      build_target:
-        description: "Co budować: apk | aab | both"
-        required: false
-        default: "both"
 
 jobs:
   build:
@@ -62,6 +58,13 @@ jobs:
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm i; fi
 
+      - name: Ensure Tailwind toolchain if PostCSS config present (optional)
+        working-directory: ${{ steps.detect.outputs.dir }}
+        run: |
+          if [ -f postcss.config.js ]; then
+            npm i -D tailwindcss@^3.4.7 postcss@^8.4.38 autoprefixer@^10.4.19
+          fi
+
       - name: Build web app
         id: web
         working-directory: ${{ steps.detect.outputs.dir }}
@@ -73,8 +76,7 @@ jobs:
             done
             echo "::error::Could not find 'dist' or 'build' or 'out' in $PWD. Provide 'web_dir'."; exit 1
           else
-            if [ -d "${{ inputs.web_dir }}" ]; then echo "web_dir=${{ inputs.web_dir }}" >> "$GITHUB_OUTPUT"
-            else echo "::error::Provided web_dir '${{ inputs.web_dir }}' does not exist"; exit 1; fi
+            if [ -d "${{ inputs.web_dir }}" ]; then echo "web_dir=${{ inputs.web_dir }}" >> "$GITHUB_OUTPUT"; else echo "::error::Provided web_dir '${{ inputs.web_dir }}' does not exist"; exit 1; fi
           fi
 
       - name: Install Capacitor tooling
@@ -89,14 +91,13 @@ jobs:
           APP_ID="${{ inputs.app_id }}"
           APP_NAME="${{ inputs.app_name }}"
           WEB_DIR="${{ steps.web.outputs.web_dir }}"
-          cat > capacitor.config.json <<JSON
-          {
-            "appId": "${APP_ID}",
-            "appName": "${APP_NAME}",
-            "webDir": "${WEB_DIR}",
-            "bundledWebRuntime": false
-          }
-          JSON
+          printf '{
+  "appId": "%s",
+  "appName": "%s",
+  "webDir": "%s",
+  "bundledWebRuntime": false
+}
+' "$APP_ID" "$APP_NAME" "$WEB_DIR" > capacitor.config.json
           cat capacitor.config.json
 
       - name: Add Android platform & sync
@@ -105,6 +106,19 @@ jobs:
           npx cap add android || true
           npx cap copy
           npx cap sync
+
+      - name: Apply Android res overrides (icons)
+        working-directory: ${{ steps.detect.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d android-res-overrides ]; then
+            mkdir -p android/app/src/main/res
+            cp -a android-res-overrides/. android/app/src/main/res/
+            echo "Applied android-res-overrides"
+          else
+            echo "No android-res-overrides dir; skipping"
+          fi
 
       - name: Setup JDK 21
         uses: actions/setup-java@v4
@@ -121,92 +135,13 @@ jobs:
       - name: Cache Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Restore keystore from secrets
-        working-directory: ${{ steps.detect.outputs.dir }}/android/app
-        env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      - name: Build debug APK
         run: |
-          set -euo pipefail
-          if [ -z "$KS_B64" ]; then echo "::error::ANDROID_KEYSTORE_BASE64 is empty"; exit 1; fi
-          echo "$KS_B64" | base64 -d > release.keystore || { echo "::error::Base64 decode failed"; exit 1; }
-          ls -l release.keystore
+          cd "${{ steps.detect.outputs.dir }}/android"
+          ./gradlew :app:assembleDebug --stacktrace
 
-      - name: Write keystore.properties
-        working-directory: ${{ steps.detect.outputs.dir }}/android/app
-        env:
-          KS_PWD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PWD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          cat > keystore.properties <<PROP
-          storeFile=app/release.keystore
-          storePassword=${KS_PWD}
-          keyAlias=${KEY_ALIAS}
-          keyPassword=${KEY_PWD}
-          PROP
-          cat keystore.properties
-
-      - name: Patch app/build.gradle for release signing
-        working-directory: ${{ steps.detect.outputs.dir }}/android/app
-        run: |
-          cat >> build.gradle <<'GRADLE'
-          def ksPropsFile = rootProject.file("app/keystore.properties")
-          if (ksPropsFile.exists()) {
-              def ksProps = new Properties()
-              ksProps.load(new FileInputStream(ksPropsFile))
-              android {
-                  signingConfigs {
-                      release {
-                          storeFile file(ksProps['storeFile'])
-                          storePassword ksProps['storePassword']
-                          keyAlias ksProps['keyAlias']
-                          keyPassword ksProps['keyPassword']
-                      }
-                  }
-                  buildTypes {
-                      release {
-                          signingConfig signingConfigs.release
-                          minifyEnabled false
-                      }
-                  }
-              }
-          }
-          GRADLE
-          echo "Applied signing config"
-          
-       - name: Apply Android res overrides (icons)
-  working-directory: ${{ steps.detect.outputs.dir }}
-  shell: bash
-  run: |
-    set -euo pipefail
-    if [ -d android-res-overrides ]; then
-      mkdir -p android/app/src/main/res
-      rsync -a android-res-overrides/ android/app/src/main/res/
-      echo "Applied android-res-overrides"
-    else
-      echo "No android-res-overrides dir; skipping"
-    fi
-
-      - name: Build release artifacts
-        working-directory: ${{ steps.detect.outputs.dir }}/android
-        run: |
-          case "${{ inputs.build_target }}" in
-            apk)  ./gradlew :app:assembleRelease --stacktrace ;;
-            aab)  ./gradlew :app:bundleRelease   --stacktrace ;;
-            both) ./gradlew :app:assembleRelease :app:bundleRelease --stacktrace ;;
-            *)    ./gradlew :app:assembleRelease :app:bundleRelease --stacktrace ;;
-          esac
-
-      - name: Upload APK
-        if: ${{ inputs.build_target == 'apk' || inputs.build_target == 'both' }}
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-release-apk
-          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/apk/release/app-release.apk
-
-      - name: Upload AAB
-        if: ${{ inputs.build_target == 'aab' || inputs.build_target == 'both' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release-aab
-          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/bundle/release/app-release.aab
+          name: app-debug
+          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/apk/debug/app-debug.apk
