@@ -173,6 +173,16 @@ jobs:
           }
           GRADLE
           echo "Applied signing config"
+- name: Apply Android res overrides (icons)
+  working-directory: ${{ steps.detect.outputs.dir }}
+  run: |
+    if [ -d android-res-overrides ]; then
+      mkdir -p android/app/src/main/res
+      cp -a android-res-overrides/. android/app/src/main/res/
+      echo "Applied android-res-overrides"
+    else
+      echo "No android-res-overrides dir; skipping"
+    fi
 
       - name: Build release artifacts
         working-directory: ${{ steps.detect.outputs.dir }}/android
