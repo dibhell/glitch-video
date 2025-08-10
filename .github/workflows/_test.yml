@@ -1,0 +1,7 @@
+name: YAML OK test
+on: workflow_dispatch
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "YAML works"
