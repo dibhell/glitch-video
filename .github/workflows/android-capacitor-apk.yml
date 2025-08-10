@@ -24,8 +24,8 @@ on:
         required: false
         default: "20"
 
-  jobs:
-  build:
+jobs:
+build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
