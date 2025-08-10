@@ -28,7 +28,7 @@ name: Build Android Release (Capacitor, signed)
         required: false
         default: "both"
 
-  jobs:
+   jobs:
   build:
     runs-on: ubuntu-latest
     steps:
