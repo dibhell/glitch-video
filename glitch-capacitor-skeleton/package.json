@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
+    "build": "react-scripts build"
+    "build": "next build && next export"
   },
   "dependencies": {
     "react": "^18.2.0",
