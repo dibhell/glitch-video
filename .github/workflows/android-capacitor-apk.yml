@@ -24,7 +24,7 @@ on:
         required: false
         default: "20"
 
-jobs:
+ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
