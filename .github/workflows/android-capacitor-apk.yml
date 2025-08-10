@@ -1,4 +1,4 @@
-name: Build Android APK (Capacitor)
+name: Build Android Release (Capacitor, signed)
 
 on:
   workflow_dispatch:
@@ -23,6 +23,10 @@ on:
         description: "Node.js version"
         required: false
         default: "20"
+      build_target:
+        description: "Co budować: apk | aab | both"
+        required: false
+        default: "both"
 
 jobs:
   build:
@@ -41,23 +45,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # 1) Ręcznie wskazany katalog
           if [[ "${{ inputs.project_dir }}" != "auto" ]]; then
             DIR="${{ inputs.project_dir }}"
-            if [[ -f "$DIR/package.json" ]]; then
-              echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-              exit 0
-            else
-              echo "::error::package.json not found in '$DIR'"; exit 1
-            fi
+            if [[ -f "$DIR/package.json" ]]; then echo "dir=$DIR" >> "$GITHUB_OUTPUT"; exit 0; else echo "::error::package.json not found in '$DIR'"; exit 1; fi
           fi
-          # 2) Root repo
           if [[ -f package.json ]]; then echo "dir=." >> "$GITHUB_OUTPUT"; exit 0; fi
-          # 3) Szukaj do 3 poziomów wgłąb (bez node_modules/android)
           CANDIDATE=$(find . -maxdepth 3 -type f -name 'package.json' -not -path '*/node_modules/*' -not -path '*/android/*' | head -n 1)
-          if [[ -z "${CANDIDATE}" ]]; then
-            echo "::error::No package.json found in repo (set inputs.project_dir)"; exit 1
-          fi
+          if [[ -z "${CANDIDATE}" ]]; then echo "::error::No package.json found in repo (set inputs.project_dir)"; exit 1; fi
           echo "dir=$(dirname "${CANDIDATE}")" >> "$GITHUB_OUTPUT"
 
       - name: Show detected dir
@@ -72,9 +66,7 @@ jobs:
         id: web
         working-directory: ${{ steps.detect.outputs.dir }}
         run: |
-          # Zbuduj jeśli masz skrypt 'build'
           if npm run | grep -qE "[[:space:]]build"; then npm run build; fi
-          # Wykryj katalog z assetami
           if [ "${{ inputs.web_dir }}" = "auto" ]; then
             for d in dist build out; do
               if [ -d "$d" ]; then echo "web_dir=$d" >> "$GITHUB_OUTPUT"; exit 0; fi
@@ -115,11 +107,10 @@ jobs:
           npx cap sync
 
       - name: Setup JDK 21
-    uses: actions/setup-java@v4
-    with:
-    distribution: temurin
-    java-version: '21'
-
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -130,13 +121,79 @@ jobs:
       - name: Cache Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build debug APK
+      - name: Restore keystore from secrets
+        working-directory: ${{ steps.detect.outputs.dir }}/android/app
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          cd "${{ steps.detect.outputs.dir }}/android"
-          ./gradlew :app:assembleDebug --stacktrace
+          set -euo pipefail
+          if [ -z "$KS_B64" ]; then echo "::error::ANDROID_KEYSTORE_BASE64 is empty"; exit 1; fi
+          echo "$KS_B64" | base64 -d > release.keystore || { echo "::error::Base64 decode failed"; exit 1; }
+          ls -l release.keystore
 
-      - name: Upload APK artifact
+      - name: Write keystore.properties
+        working-directory: ${{ steps.detect.outputs.dir }}/android/app
+        env:
+          KS_PWD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PWD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          cat > keystore.properties <<PROP
+          storeFile=app/release.keystore
+          storePassword=${KS_PWD}
+          keyAlias=${KEY_ALIAS}
+          keyPassword=${KEY_PWD}
+          PROP
+          cat keystore.properties
+
+      - name: Patch app/build.gradle for release signing
+        working-directory: ${{ steps.detect.outputs.dir }}/android/app
+        run: |
+          cat >> build.gradle <<'GRADLE'
+          def ksPropsFile = rootProject.file("app/keystore.properties")
+          if (ksPropsFile.exists()) {
+              def ksProps = new Properties()
+              ksProps.load(new FileInputStream(ksPropsFile))
+              android {
+                  signingConfigs {
+                      release {
+                          storeFile file(ksProps['storeFile'])
+                          storePassword ksProps['storePassword']
+                          keyAlias ksProps['keyAlias']
+                          keyPassword ksProps['keyPassword']
+                      }
+                  }
+                  buildTypes {
+                      release {
+                          signingConfig signingConfigs.release
+                          minifyEnabled false
+                      }
+                  }
+              }
+          }
+          GRADLE
+          echo "Applied signing config"
+
+      - name: Build release artifacts
+        working-directory: ${{ steps.detect.outputs.dir }}/android
+        run: |
+          case "${{ inputs.build_target }}" in
+            apk)  ./gradlew :app:assembleRelease --stacktrace ;;
+            aab)  ./gradlew :app:bundleRelease   --stacktrace ;;
+            both) ./gradlew :app:assembleRelease :app:bundleRelease --stacktrace ;;
+            *)    ./gradlew :app:assembleRelease :app:bundleRelease --stacktrace ;;
+          esac
+
+      - name: Upload APK
+        if: ${{ inputs.build_target == 'apk' || inputs.build_target == 'both' }}
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
-          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/apk/debug/app-debug.apk
+          name: app-release-apk
+          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Upload AAB
+        if: ${{ inputs.build_target == 'aab' || inputs.build_target == 'both' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-aab
+          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/bundle/release/app-release.aab
