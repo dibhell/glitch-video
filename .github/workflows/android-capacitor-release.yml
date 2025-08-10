@@ -11,8 +11,12 @@ on:
         description: "App name (launcher title)"
         required: false
         default: "Glitch Video"
+      project_dir:
+        description: "Folder z package.json (np. '.', 'web', 'app', 'frontend') lub 'auto'"
+        required: false
+        default: "auto"
       web_dir:
-        description: "Directory with built web assets (dist/build/out) or 'auto'"
+        description: "Katalog z buildem web (dist/build/out) lub 'auto'"
         required: false
         default: "auto"
       node_version:
@@ -20,7 +24,7 @@ on:
         required: false
         default: "20"
       build_target:
-        description: "What to build: apk | aab | both"
+        description: "Co budować: apk | aab | both"
         required: false
         default: "both"
 
@@ -36,30 +40,51 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
 
+      - name: Detect project directory
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ inputs.project_dir }}" != "auto" ]]; then
+            DIR="${{ inputs.project_dir }}"
+            if [[ -f "$DIR/package.json" ]]; then echo "dir=$DIR" >> "$GITHUB_OUTPUT"; exit 0; else echo "::error::package.json not found in '$DIR'"; exit 1; fi
+          fi
+          if [[ -f package.json ]]; then echo "dir=." >> "$GITHUB_OUTPUT"; exit 0; fi
+          CANDIDATE=$(find . -maxdepth 3 -type f -name 'package.json' -not -path '*/node_modules/*' -not -path '*/android/*' | head -n 1)
+          if [[ -z "${CANDIDATE}" ]]; then echo "::error::No package.json found in repo (set inputs.project_dir)"; exit 1; fi
+          echo "dir=$(dirname "${CANDIDATE}")" >> "$GITHUB_OUTPUT"
+
+      - name: Show detected dir
+        run: echo "Project dir = ${{ steps.detect.outputs.dir }}"
+
       - name: Install JS deps
+        working-directory: ${{ steps.detect.outputs.dir }}
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm i; fi
 
       - name: Build web app
         id: web
+        working-directory: ${{ steps.detect.outputs.dir }}
         run: |
           if npm run | grep -qE "[[:space:]]build"; then npm run build; fi
           if [ "${{ inputs.web_dir }}" = "auto" ]; then
             for d in dist build out; do
-              if [ -d "$d" ]; then echo "web_dir=$d" >> $GITHUB_OUTPUT; exit 0; fi
+              if [ -d "$d" ]; then echo "web_dir=$d" >> "$GITHUB_OUTPUT"; exit 0; fi
             done
-            echo "::error::Could not find 'dist' or 'build' or 'out'."; exit 1
+            echo "::error::Could not find 'dist' or 'build' or 'out' in $PWD. Provide 'web_dir'."; exit 1
           else
-            if [ -d "${{ inputs.web_dir }}" ]; then echo "web_dir=${{ inputs.web_dir }}" >> $GITHUB_OUTPUT
-            else echo "::error::Provided web_dir does not exist"; exit 1; fi
+            if [ -d "${{ inputs.web_dir }}" ]; then echo "web_dir=${{ inputs.web_dir }}" >> "$GITHUB_OUTPUT"
+            else echo "::error::Provided web_dir '${{ inputs.web_dir }}' does not exist"; exit 1; fi
           fi
 
       - name: Install Capacitor tooling
+        working-directory: ${{ steps.detect.outputs.dir }}
         run: |
           npm i -D @capacitor/cli@latest
           npm i @capacitor/core@latest @capacitor/android@latest
 
       - name: Generate capacitor.config.json
+        working-directory: ${{ steps.detect.outputs.dir }}
         run: |
           APP_ID="${{ inputs.app_id }}"
           APP_NAME="${{ inputs.app_name }}"
@@ -72,8 +97,10 @@ jobs:
             "bundledWebRuntime": false
           }
           JSON
+          cat capacitor.config.json
 
       - name: Add Android platform & sync
+        working-directory: ${{ steps.detect.outputs.dir }}
         run: |
           npx cap add android || true
           npx cap copy
@@ -95,16 +122,17 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       - name: Restore keystore from secrets
-        working-directory: android/app
+        working-directory: ${{ steps.detect.outputs.dir }}/android/app
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
+          set -euo pipefail
           if [ -z "$KS_B64" ]; then echo "::error::ANDROID_KEYSTORE_BASE64 is empty"; exit 1; fi
           echo "$KS_B64" | base64 -d > release.keystore || { echo "::error::Base64 decode failed"; exit 1; }
           ls -l release.keystore
 
       - name: Write keystore.properties
-        working-directory: android/app
+        working-directory: ${{ steps.detect.outputs.dir }}/android/app
         env:
           KS_PWD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -119,7 +147,7 @@ jobs:
           cat keystore.properties
 
       - name: Patch app/build.gradle for release signing
-        working-directory: android/app
+        working-directory: ${{ steps.detect.outputs.dir }}/android/app
         run: |
           cat >> build.gradle <<'GRADLE'
           def ksPropsFile = rootProject.file("app/keystore.properties")
@@ -147,7 +175,7 @@ jobs:
           echo "Applied signing config"
 
       - name: Build release artifacts
-        working-directory: android
+        working-directory: ${{ steps.detect.outputs.dir }}/android
         run: |
           case "${{ inputs.build_target }}" in
             apk)  ./gradlew :app:assembleRelease --stacktrace ;;
@@ -161,11 +189,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/apk/release/app-release.apk
 
       - name: Upload AAB
         if: ${{ inputs.build_target == 'aab' || inputs.build_target == 'both' }}
         uses: actions/upload-artifact@v4
         with:
           name: app-release-aab
-          path: android/app/build/outputs/bundle/release/app-release.aab
+          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/bundle/release/app-release.aab
