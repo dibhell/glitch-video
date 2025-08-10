@@ -12,11 +12,11 @@ on:
         required: false
         default: "Glitch Video"
       project_dir:
-        description: "Folder with package.json ('.', 'web', 'app', etc) or 'auto'"
+        description: "Folder z package.json (np. '.', 'web', 'app', 'frontend') lub 'auto'"
         required: false
         default: "auto"
       web_dir:
-        description: "Web build dir (dist/build/out) or 'auto'"
+        description: "Katalog z buildem web (dist/build/out) lub 'auto'"
         required: false
         default: "auto"
       node_version:
@@ -57,6 +57,13 @@ jobs:
         working-directory: ${{ steps.detect.outputs.dir }}
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm i; fi
+
+      - name: Ensure Tailwind toolchain if PostCSS config present (optional)
+        working-directory: ${{ steps.detect.outputs.dir }}
+        run: |
+          if [ -f postcss.config.js ]; then
+            npm i -D tailwindcss@^3.4.7 postcss@^8.4.38 autoprefixer@^10.4.19
+          fi
 
       - name: Build web app
         id: web
@@ -99,19 +106,6 @@ jobs:
           npx cap add android || true
           npx cap copy
           npx cap sync
-
-      - name: Apply Android res overrides (icons)
-        working-directory: ${{ steps.detect.outputs.dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -d android-res-overrides ]; then
-            mkdir -p android/app/src/main/res
-            cp -a android-res-overrides/. android/app/src/main/res/
-            echo "Applied android-res-overrides"
-          else
-            echo "No android-res-overrides dir; skipping"
-          fi
 
       - name: Setup JDK 21
         uses: actions/setup-java@v4
