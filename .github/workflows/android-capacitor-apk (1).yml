@@ -1,4 +1,4 @@
-name: Build Android APK (Capacitor)
+name: Build Android Release (Capacitor, signed)
 
 on:
   workflow_dispatch:
@@ -23,6 +23,10 @@ on:
         description: "Node.js version"
         required: false
         default: "20"
+      build_target:
+        description: "What to build: apk | aab | both"
+        required: false
+        default: "both"
 
 jobs:
   build:
@@ -128,13 +132,98 @@ jobs:
       - name: Cache Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build debug APK
+      - name: Ensure keystore (use secrets or generate)
+        id: ks
+        working-directory: ${{ steps.detect.outputs.dir }}/android/app
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_PWD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PWD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          cd "${{ steps.detect.outputs.dir }}/android"
-          ./gradlew :app:assembleDebug --stacktrace
+          set -euo pipefail
+          alias="${KS_ALIAS:-upload}"
+          if [ -n "${KS_B64:-}" ]; then
+            echo "$KS_B64" | base64 -d > release.keystore || { echo "::error::Base64 decode failed"; exit 1; }
+            store="${KS_PWD:-android}"
+            key="${KEY_PWD:-$store}"
+            MODE=secrets
+          else
+            store="$(openssl rand -hex 12 || echo android)"
+            key="$store"
+            keytool -genkeypair -v -storetype JKS -keystore release.keystore               -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000               -storepass "$store" -keypass "$key" -dname "CN=CI,O=CI,L=CI,S=CI,C=US"
+            if base64 -w0 release.keystore > keystore.base64 2>/dev/null; then :; else base64 release.keystore | tr -d '
+' > keystore.base64; fi
+            printf 'alias=%s
+storePassword=%s
+keyPassword=%s
+' "$alias" "$store" "$key" > keystore-info.txt
+            MODE=generated
+          fi
+          printf 'storeFile=release.keystore
+storePassword=%s
+keyAlias=%s
+keyPassword=%s
+' "$store" "$alias" "$key" > keystore.properties
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
-      - name: Upload APK artifact
+      - name: Upload generated keystore (save for next releases)
+        if: steps.ks.outputs.mode == 'generated'
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
-          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/apk/debug/app-debug.apk
+          name: generated-keystore
+          path: |
+            ${{ steps.detect.outputs.dir }}/android/app/keystore.base64
+            ${{ steps.detect.outputs.dir }}/android/app/keystore-info.txt
+
+      - name: Patch app/build.gradle for release signing
+        working-directory: ${{ steps.detect.outputs.dir }}/android/app
+        run: |
+          cat >> build.gradle <<'GRADLE'
+          def ksPropsFile = rootProject.file("app/keystore.properties")
+          if (ksPropsFile.exists()) {
+              def ksProps = new Properties()
+              ksProps.load(new FileInputStream(ksPropsFile))
+              android {
+                  signingConfigs {
+                      release {
+                          storeFile file(ksProps['storeFile'])
+                          storePassword ksProps['storePassword']
+                          keyAlias ksProps['keyAlias']
+                          keyPassword ksProps['keyPassword']
+                      }
+                  }
+                  buildTypes {
+                      release {
+                          signingConfig signingConfigs.release
+                          minifyEnabled false
+                      }
+                  }
+              }
+          }
+          GRADLE
+          echo "Applied signing config"
+
+      - name: Build release artifacts
+        working-directory: ${{ steps.detect.outputs.dir }}/android
+        run: |
+          case "${{ inputs.build_target }}" in
+            apk)  ./gradlew :app:assembleRelease --stacktrace ;;
+            aab)  ./gradlew :app:bundleRelease   --stacktrace ;;
+            both) ./gradlew :app:assembleRelease :app:bundleRelease --stacktrace ;;
+            *)    ./gradlew :app:assembleRelease :app:bundleRelease --stacktrace ;;
+          esac
+
+      - name: Upload APK
+        if: ${{ inputs.build_target == 'apk' || inputs.build_target == 'both' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-apk
+          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Upload AAB
+        if: ${{ inputs.build_target == 'aab' || inputs.build_target == 'both' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-aab
+          path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/bundle/release/app-release.aab
