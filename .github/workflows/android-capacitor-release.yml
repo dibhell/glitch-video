@@ -101,7 +101,7 @@ jobs:
            "webDir": "%s",
            "bundledWebRuntime": false
            }
-' "$APP_ID" "$APP_NAME" "$WEB_DIR" > capacitor.config.json
+         ' "$APP_ID" "$APP_NAME" "$WEB_DIR" > capacitor.config.json
           cat capacitor.config.json
 
       - name: Add Android platform & sync
