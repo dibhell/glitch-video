@@ -27,9 +27,9 @@ on:
         description: "Co budować: apk | aab | both"
         required: false
         default: "both"
-        
+
 jobs:
-   build:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -47,11 +47,17 @@ jobs:
           set -euo pipefail
           if [[ "${{ inputs.project_dir }}" != "auto" ]]; then
             DIR="${{ inputs.project_dir }}"
-            if [[ -f "$DIR/package.json" ]]; then echo "dir=$DIR" >> "$GITHUB_OUTPUT"; exit 0; else echo "::error::package.json not found in '$DIR'"; exit 1; fi
+            if [[ -f "$DIR/package.json" ]]; then
+              echo "dir=$DIR" >> "$GITHUB_OUTPUT"; exit 0
+            else
+              echo "::error::package.json not found in '$DIR'"; exit 1
+            fi
           fi
           if [[ -f package.json ]]; then echo "dir=." >> "$GITHUB_OUTPUT"; exit 0; fi
           CANDIDATE=$(find . -maxdepth 3 -type f -name 'package.json' -not -path '*/node_modules/*' -not -path '*/android/*' | head -n 1)
-          if [[ -z "${CANDIDATE}" ]]; then echo "::error::No package.json found in repo (set inputs.project_dir)"; exit 1; fi
+          if [[ -z "${CANDIDATE}" ]]; then
+            echo "::error::No package.json found in repo (set inputs.project_dir)"; exit 1
+          fi
           echo "dir=$(dirname "${CANDIDATE}")" >> "$GITHUB_OUTPUT"
 
       - name: Show detected dir
@@ -80,7 +86,11 @@ jobs:
             done
             echo "::error::Could not find 'dist' or 'build' or 'out' in $PWD. Provide 'web_dir'."; exit 1
           else
-            if [ -d "${{ inputs.web_dir }}" ]; then echo "web_dir=${{ inputs.web_dir }}" >> "$GITHUB_OUTPUT"; else echo "::error::Provided web_dir '${{ inputs.web_dir }}' does not exist"; exit 1; fi
+            if [ -d "${{ inputs.web_dir }}" ]; then
+              echo "web_dir=${{ inputs.web_dir }}" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::Provided web_dir '${{ inputs.web_dir }}' does not exist"; exit 1
+            fi
           fi
 
       - name: Install Capacitor tooling
@@ -91,18 +101,22 @@ jobs:
 
       - name: Generate capacitor.config.json
         working-directory: ${{ steps.detect.outputs.dir }}
+        shell: bash
         run: |
+          set -euo pipefail
           APP_ID="${{ inputs.app_id }}"
           APP_NAME="${{ inputs.app_name }}"
           WEB_DIR="${{ steps.web.outputs.web_dir }}"
-           printf '{
-           "appId": "%s",
-           "appName": "%s",
-           "webDir": "%s",
-           "bundledWebRuntime": false
-           }
-     ' "$APP_ID" "$APP_NAME" "$WEB_DIR" > capacitor.config.json cat 
-      capacitor.config.json
+          cat > capacitor.config.json <<JSON
+          {
+            "appId": "${APP_ID}",
+            "appName": "${APP_NAME}",
+            "webDir": "${WEB_DIR}",
+            "bundledWebRuntime": false
+          }
+          JSON
+          echo "Generated capacitor.config.json:"
+          cat capacitor.config.json
 
       - name: Add Android platform & sync
         working-directory: ${{ steps.detect.outputs.dir }}
@@ -114,8 +128,8 @@ jobs:
       - name: Setup JDK 21
         uses: actions/setup-java@v4
         with:
-        distribution: temurin
-        java-version: '21'
+          distribution: temurin
+          java-version: '21'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -134,6 +148,7 @@ jobs:
           KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KS_PWD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_PWD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
         run: |
           set -euo pipefail
           alias="${KS_ALIAS:-upload}"
@@ -148,19 +163,12 @@ jobs:
             keytool -genkeypair -v -storetype JKS -keystore release.keystore \
               -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 \
               -storepass "$store" -keypass "$key" -dname "CN=CI,O=CI,L=CI,S=CI,C=US"
-            if base64 -w0 release.keystore > keystore.base64 2>/dev/null; then :; else base64 release.keystore | tr -d '
-' > keystore.base64; fi
-            printf 'alias=%s
-storePassword=%s
-keyPassword=%s
-' "$alias" "$store" "$key" > keystore-info.txt
+            # Base64 fallback compatible with macOS
+            if base64 -w0 release.keystore > keystore.base64 2>/dev/null; then :; else base64 release.keystore | tr -d '\n' > keystore.base64; fi
+            printf 'alias=%s\nstorePassword=%s\nkeyPassword=%s\n' "$alias" "$store" "$key" > keystore-info.txt
             MODE=generated
           fi
-          printf 'storeFile=release.keystore
-storePassword=%s
-keyAlias=%s
-keyPassword=%s
-' "$store" "$alias" "$key" > keystore.properties
+          printf 'storeFile=release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$store" "$alias" "$key" > keystore.properties
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       - name: Upload generated keystore (save for next releases)
