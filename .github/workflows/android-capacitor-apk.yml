@@ -23,7 +23,6 @@ on:
         description: "Node.js version"
         required: false
         default: "20"
-
 jobs:
   build:
     runs-on: ubuntu-latest
