@@ -1,12 +1,32 @@
 name: Build Android Release (Capacitor, signed)
 
-on: workflow_dispatch
-
-env:
-  APP_ID: com.example.glitch
-  APP_NAME: Glitch Video
-  NODE_VERSION: '20'
-  BUILD_TARGET: both
+on:
+  workflow_dispatch:
+    inputs:
+      app_id:
+        description: "Android Application ID (package)"
+        required: false
+        default: "com.example.glitch"
+      app_name:
+        description: "App name (launcher title)"
+        required: false
+        default: "Glitch Video"
+      project_dir:
+        description: "Folder z package.json (np. '.', 'web', 'app', 'frontend') lub 'auto'"
+        required: false
+        default: "auto"
+      web_dir:
+        description: "Katalog z buildem web (dist/build/out) lub 'auto'"
+        required: false
+        default: "auto"
+      node_version:
+        description: "Node.js version"
+        required: false
+        default: "20"
+      build_target:
+        description: "Co budować: apk | aab | both"
+        required: false
+        default: "both"
 
 jobs:
   build:
@@ -18,17 +38,24 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ inputs.node_version }}
 
       - name: Detect project directory
         id: detect
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "${{ inputs.project_dir }}" != "auto" ]]; then
+            DIR="${{ inputs.project_dir }}"
+            if [[ -f "$DIR/package.json" ]]; then echo "dir=$DIR" >> "$GITHUB_OUTPUT"; exit 0; else echo "::error::package.json not found in '$DIR'"; exit 1; fi
+          fi
           if [[ -f package.json ]]; then echo "dir=." >> "$GITHUB_OUTPUT"; exit 0; fi
           CANDIDATE=$(find . -maxdepth 3 -type f -name 'package.json' -not -path '*/node_modules/*' -not -path '*/android/*' | head -n 1)
-          if [[ -z "${CANDIDATE}" ]]; then echo "::error::No package.json found"; exit 1; fi
+          if [[ -z "${CANDIDATE}" ]]; then echo "::error::No package.json found in repo (set inputs.project_dir)"; exit 1; fi
           echo "dir=$(dirname "${CANDIDATE}")" >> "$GITHUB_OUTPUT"
+
+      - name: Show detected dir
+        run: echo "Project dir = ${{ steps.detect.outputs.dir }}"
 
       - name: Install JS deps
         working-directory: ${{ steps.detect.outputs.dir }}
@@ -40,10 +67,15 @@ jobs:
         working-directory: ${{ steps.detect.outputs.dir }}
         run: |
           if npm run | grep -qE "[[:space:]]build"; then npm run build; fi
-          for d in dist build out; do
-            if [ -d "$d" ]; then echo "web_dir=$d" >> "$GITHUB_OUTPUT"; exit 0; fi
-          done
-          echo "::error::Could not find 'dist' or 'build' or 'out' in $PWD"; exit 1
+          if [ "${{ inputs.web_dir }}" = "auto" ]; then
+            for d in dist build out; do
+              if [ -d "$d" ]; then echo "web_dir=$d" >> "$GITHUB_OUTPUT"; exit 0; fi
+            done
+            echo "::error::Could not find 'dist' or 'build' or 'out' in $PWD. Provide 'web_dir'."; exit 1
+          else
+            if [ -d "${{ inputs.web_dir }}" ]; then echo "web_dir=${{ inputs.web_dir }}" >> "$GITHUB_OUTPUT"
+            else echo "::error::Provided web_dir '${{ inputs.web_dir }}' does not exist"; exit 1; fi
+          fi
 
       - name: Install Capacitor tooling
         working-directory: ${{ steps.detect.outputs.dir }}
@@ -54,13 +86,10 @@ jobs:
       - name: Generate capacitor.config.json
         working-directory: ${{ steps.detect.outputs.dir }}
         run: |
-          printf '{
-  "appId": "%s",
-  "appName": "%s",
-  "webDir": "%s",
-  "bundledWebRuntime": false
-}
-' "$APP_ID" "$APP_NAME" "${{ steps.web.outputs.web_dir }}" > capacitor.config.json
+          APP_ID="${{ inputs.app_id }}"
+          APP_NAME="${{ inputs.app_name }}"
+          WEB_DIR="${{ steps.web.outputs.web_dir }}"
+          printf '{\n  "appId": "%s",\n  "appName": "%s",\n  "webDir": "%s",\n  "bundledWebRuntime": false\n}\n' "$APP_ID" "$APP_NAME" "$WEB_DIR" > capacitor.config.json
           cat capacitor.config.json
 
       - name: Add Android platform & sync
@@ -69,19 +98,6 @@ jobs:
           npx cap add android || true
           npx cap copy
           npx cap sync
-
-      - name: Apply Android res overrides (icons)
-        working-directory: ${{ steps.detect.outputs.dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -d android-res-overrides ]; then
-            mkdir -p android/app/src/main/res
-            cp -a android-res-overrides/. android/app/src/main/res/
-            echo "Applied android-res-overrides"
-          else
-            echo "No android-res-overrides dir; skipping"
-          fi
 
       - name: Setup JDK 21
         uses: actions/setup-java@v4
@@ -117,13 +133,12 @@ jobs:
           else
             store="$(openssl rand -hex 12 || echo android)"
             key="$store"
-            keytool -genkeypair -v -storetype JKS -keystore release.keystore               -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000               -storepass "$store" -keypass "$key" -dname "CN=CI,O=CI,L=CI,S=CI,C=US"
-            if base64 -w0 release.keystore > keystore.base64 2>/dev/null; then :; else base64 release.keystore | tr -d '
-' > keystore.base64; fi
-            printf 'alias=%s
-storePassword=%s
-keyPassword=%s
-' "$alias" "$store" "$key" > keystore-info.txt
+            keytool -genkeypair -v -storetype JKS -keystore release.keystore \
+              -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$store" -keypass "$key" -dname "CN=CI,O=CI,L=CI,S=CI,C=US"
+            # Artefakty do zapisania na przyszłość
+            if base64 -w0 release.keystore > keystore.base64 2>/dev/null; then :; else base64 release.keystore | tr -d '\n' > keystore.base64; fi
+            printf 'alias=%s\nstorePassword=%s\nkeyPassword=%s\n' "$alias" "$store" "$key" > keystore-info.txt
             MODE=generated
           fi
           printf 'storeFile=release.keystore
@@ -173,7 +188,7 @@ keyPassword=%s
       - name: Build release artifacts
         working-directory: ${{ steps.detect.outputs.dir }}/android
         run: |
-          case "${BUILD_TARGET}" in
+          case "${{ inputs.build_target }}" in
             apk)  ./gradlew :app:assembleRelease --stacktrace ;;
             aab)  ./gradlew :app:bundleRelease   --stacktrace ;;
             both) ./gradlew :app:assembleRelease :app:bundleRelease --stacktrace ;;
@@ -181,15 +196,15 @@ keyPassword=%s
           esac
 
       - name: Upload APK
+        if: ${{ inputs.build_target == 'apk' || inputs.build_target == 'both' }}
         uses: actions/upload-artifact@v4
-        if: ${{ env.BUILD_TARGET == 'apk' || env.BUILD_TARGET == 'both' }}
         with:
           name: app-release-apk
           path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/apk/release/app-release.apk
 
       - name: Upload AAB
+        if: ${{ inputs.build_target == 'aab' || inputs.build_target == 'both' }}
         uses: actions/upload-artifact@v4
-        if: ${{ env.BUILD_TARGET == 'aab' || env.BUILD_TARGET == 'both' }}
         with:
           name: app-release-aab
           path: ${{ steps.detect.outputs.dir }}/android/app/build/outputs/bundle/release/app-release.aab
