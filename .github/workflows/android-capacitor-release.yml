@@ -89,14 +89,7 @@ jobs:
           APP_ID="${{ inputs.app_id }}"
           APP_NAME="${{ inputs.app_name }}"
           WEB_DIR="${{ steps.web.outputs.web_dir }}"
-          cat > capacitor.config.json <<JSON
-          {
-            "appId": "${APP_ID}",
-            "appName": "${APP_NAME}",
-            "webDir": "${WEB_DIR}",
-            "bundledWebRuntime": false
-          }
-          JSON
+          printf '{\n  "appId": "%s",\n  "appName": "%s",\n  "webDir": "%s",\n  "bundledWebRuntime": false\n}\n' "$APP_ID" "$APP_NAME" "$WEB_DIR" > capacitor.config.json
           cat capacitor.config.json
 
       - name: Add Android platform & sync
@@ -144,25 +137,12 @@ jobs:
               -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 \
               -storepass "$store" -keypass "$key" -dname "CN=CI,O=CI,L=CI,S=CI,C=US"
             # Artefakty do zapisania na przyszłość
-            if base64 -w0 release.keystore > keystore.base64 2>/dev/null; then
-              :
-            else
-              base64 release.keystore | tr -d '\n' > keystore.base64
-            fi
-            cat > keystore-info.txt <<INFO
-alias=$alias
-storePassword=$store
-keyPassword=$key
-INFO
+            if base64 -w0 release.keystore > keystore.base64 2>/dev/null; then :; else base64 release.keystore | tr -d '\n' > keystore.base64; fi
+            printf 'alias=%s\nstorePassword=%s\nkeyPassword=%s\n' "$alias" "$store" "$key" > keystore-info.txt
             MODE=generated
           fi
-          cat > keystore.properties <<PROP
-          storeFile=app/release.keystore
-          storePassword=$store
-          keyAlias=$alias
-          keyPassword=$key
-          PROP
-          echo "mode=$MODE" >> $GITHUB_OUTPUT
+          printf 'storeFile=app/release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$store" "$alias" "$key" > keystore.properties
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       - name: Upload generated keystore (save for next releases)
         if: steps.ks.outputs.mode == 'generated'
