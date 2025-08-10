@@ -91,11 +91,7 @@ build:
           APP_ID="${{ inputs.app_id }}"
           APP_NAME="${{ inputs.app_name }}"
           WEB_DIR="${{ steps.web.outputs.web_dir }}"
-          printf '{
-  "appId": "%s",
-  "appName": "%s",
-  "webDir": "%s",
-  "bundledWebRuntime": false
+          printf 'storeFile=release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$store" "$alias" "$key" > keystore.properties
 }
 ' "$APP_ID" "$APP_NAME" "$WEB_DIR" > capacitor.config.json
           cat capacitor.config.json
