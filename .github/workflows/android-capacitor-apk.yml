@@ -173,7 +173,8 @@ jobs:
           }
           GRADLE
           echo "Applied signing config"
-- name: Apply Android res overrides (icons)
+          
+       - name: Apply Android res overrides (icons)
   working-directory: ${{ steps.detect.outputs.dir }}
   shell: bash
   run: |
