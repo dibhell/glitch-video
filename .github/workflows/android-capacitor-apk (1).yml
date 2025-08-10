@@ -25,7 +25,6 @@ on:
         default: "20"
 
 jobs:
-
   build:
     runs-on: ubuntu-latest
     steps:
