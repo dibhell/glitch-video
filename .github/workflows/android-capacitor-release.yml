@@ -28,8 +28,8 @@ on:
         required: false
         default: "both"
         
- jobs:
-  build:
+jobs:
+   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
