@@ -62,6 +62,13 @@ jobs:
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm i; fi
 
+      - name: Ensure Tailwind toolchain if PostCSS config present (optional)
+        working-directory: ${{ steps.detect.outputs.dir }}
+        run: |
+          if [ -f postcss.config.js ]; then
+            npm i -D tailwindcss@^3.4.7 postcss@^8.4.38 autoprefixer@^10.4.19
+          fi
+
       - name: Build web app
         id: web
         working-directory: ${{ steps.detect.outputs.dir }}
@@ -73,8 +80,7 @@ jobs:
             done
             echo "::error::Could not find 'dist' or 'build' or 'out' in $PWD. Provide 'web_dir'."; exit 1
           else
-            if [ -d "${{ inputs.web_dir }}" ]; then echo "web_dir=${{ inputs.web_dir }}" >> "$GITHUB_OUTPUT"
-            else echo "::error::Provided web_dir '${{ inputs.web_dir }}' does not exist"; exit 1; fi
+            if [ -d "${{ inputs.web_dir }}" ]; then echo "web_dir=${{ inputs.web_dir }}" >> "$GITHUB_OUTPUT"; else echo "::error::Provided web_dir '${{ inputs.web_dir }}' does not exist"; exit 1; fi
           fi
 
       - name: Install Capacitor tooling
@@ -89,7 +95,13 @@ jobs:
           APP_ID="${{ inputs.app_id }}"
           APP_NAME="${{ inputs.app_name }}"
           WEB_DIR="${{ steps.web.outputs.web_dir }}"
-          printf '{\n  "appId": "%s",\n  "appName": "%s",\n  "webDir": "%s",\n  "bundledWebRuntime": false\n}\n' "$APP_ID" "$APP_NAME" "$WEB_DIR" > capacitor.config.json
+          printf '{
+  "appId": "%s",
+  "appName": "%s",
+  "webDir": "%s",
+  "bundledWebRuntime": false
+}
+' "$APP_ID" "$APP_NAME" "$WEB_DIR" > capacitor.config.json
           cat capacitor.config.json
 
       - name: Add Android platform & sync
@@ -98,6 +110,19 @@ jobs:
           npx cap add android || true
           npx cap copy
           npx cap sync
+
+      - name: Apply Android res overrides (icons)
+        working-directory: ${{ steps.detect.outputs.dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d android-res-overrides ]; then
+            mkdir -p android/app/src/main/res
+            cp -a android-res-overrides/. android/app/src/main/res/
+            echo "Applied android-res-overrides"
+          else
+            echo "No android-res-overrides dir; skipping"
+          fi
 
       - name: Setup JDK 21
         uses: actions/setup-java@v4
@@ -136,13 +161,19 @@ jobs:
             keytool -genkeypair -v -storetype JKS -keystore release.keystore \
               -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 \
               -storepass "$store" -keypass "$key" -dname "CN=CI,O=CI,L=CI,S=CI,C=US"
-            # Artefakty do zapisania na przyszłość
-            if base64 -w0 release.keystore > keystore.base64 2>/dev/null; then :; else base64 release.keystore | tr -d '\n' > keystore.base64; fi
-            printf 'alias=%s\nstorePassword=%s\nkeyPassword=%s\n' "$alias" "$store" "$key" > keystore-info.txt
+            if base64 -w0 release.keystore > keystore.base64 2>/dev/null; then :; else base64 release.keystore | tr -d '
+' > keystore.base64; fi
+            printf 'alias=%s
+storePassword=%s
+keyPassword=%s
+' "$alias" "$store" "$key" > keystore-info.txt
             MODE=generated
           fi
-          printf 'storeFile=release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$store" "$alias" "$key" > keystore.properties
-
+          printf 'storeFile=release.keystore
+storePassword=%s
+keyAlias=%s
+keyPassword=%s
+' "$store" "$alias" "$key" > keystore.properties
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       - name: Upload generated keystore (save for next releases)
