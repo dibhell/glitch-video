@@ -12,17 +12,18 @@ on:
         required: false
         default: "Glitch Video"
       project_dir:
-        description: "Folder z package.json (np. '.', 'web', 'app', 'frontend') lub 'auto'"
+        description: "Folder with package.json ('.', 'web', 'app', etc) or 'auto'"
         required: false
         default: "auto"
       web_dir:
-        description: "Katalog z buildem web (dist/build/out) lub 'auto'"
+        description: "Web build dir (dist/build/out) or 'auto'"
         required: false
         default: "auto"
       node_version:
         description: "Node.js version"
         required: false
         default: "20"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -56,13 +57,6 @@ jobs:
         working-directory: ${{ steps.detect.outputs.dir }}
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm i; fi
-
-      - name: Ensure Tailwind toolchain if PostCSS config present (optional)
-        working-directory: ${{ steps.detect.outputs.dir }}
-        run: |
-          if [ -f postcss.config.js ]; then
-            npm i -D tailwindcss@^3.4.7 postcss@^8.4.38 autoprefixer@^10.4.19
-          fi
 
       - name: Build web app
         id: web
