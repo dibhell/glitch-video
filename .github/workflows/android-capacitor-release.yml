@@ -121,30 +121,53 @@ jobs:
       - name: Cache Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Restore keystore from secrets
+      - name: Ensure keystore (use secrets or generate)
+        id: ks
         working-directory: ${{ steps.detect.outputs.dir }}/android/app
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          set -euo pipefail
-          if [ -z "$KS_B64" ]; then echo "::error::ANDROID_KEYSTORE_BASE64 is empty"; exit 1; fi
-          echo "$KS_B64" | base64 -d > release.keystore || { echo "::error::Base64 decode failed"; exit 1; }
-          ls -l release.keystore
-
-      - name: Write keystore.properties
-        working-directory: ${{ steps.detect.outputs.dir }}/android/app
-        env:
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KS_PWD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PWD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
+          alias="${KS_ALIAS:-upload}"
+          if [ -n "${KS_B64:-}" ]; then
+            echo "$KS_B64" | base64 -d > release.keystore || { echo "::error::Base64 decode failed"; exit 1; }
+            store="${KS_PWD:-android}"
+            key="${KEY_PWD:-$store}"
+            MODE=secrets
+          else
+            store="$(openssl rand -hex 12 || echo android)"
+            key="$store"
+            keytool -genkeypair -v -storetype JKS -keystore release.keystore \
+              -alias "$alias" -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$store" -keypass "$key" -dname "CN=CI,O=CI,L=CI,S=CI,C=US"
+            # Artefakty do zapisania na przyszłość
+            if base64 -w0 release.keystore > keystore.base64 2>/dev/null; then :; else base64 release.keystore | tr -d '
+' > keystore.base64; fi
+            printf "alias=%s
+storePassword=%s
+keyPassword=%s
+" "$alias" "$store" "$key" > keystore-info.txt
+            MODE=generated
+          fi
           cat > keystore.properties <<PROP
           storeFile=app/release.keystore
-          storePassword=${KS_PWD}
-          keyAlias=${KEY_ALIAS}
-          keyPassword=${KEY_PWD}
+          storePassword=$store
+          keyAlias=$alias
+          keyPassword=$key
           PROP
-          cat keystore.properties
+          echo "mode=$MODE" >> $GITHUB_OUTPUT
+
+      - name: Upload generated keystore (save for next releases)
+        if: steps.ks.outputs.mode == 'generated'
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-keystore
+          path: |
+            ${{ steps.detect.outputs.dir }}/android/app/keystore.base64
+            ${{ steps.detect.outputs.dir }}/android/app/keystore-info.txt
 
       - name: Patch app/build.gradle for release signing
         working-directory: ${{ steps.detect.outputs.dir }}/android/app
