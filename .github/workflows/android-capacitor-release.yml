@@ -141,11 +141,8 @@ jobs:
             printf 'alias=%s\nstorePassword=%s\nkeyPassword=%s\n' "$alias" "$store" "$key" > keystore-info.txt
             MODE=generated
           fi
-          printf 'storeFile=release.keystore
-storePassword=%s
-keyAlias=%s
-keyPassword=%s
-' "$store" "$alias" "$key" > keystore.properties
+          printf 'storeFile=release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' "$store" "$alias" "$key" > keystore.properties
+
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
 
       - name: Upload generated keystore (save for next releases)
