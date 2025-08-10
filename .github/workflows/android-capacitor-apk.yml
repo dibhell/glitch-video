@@ -114,11 +114,12 @@ jobs:
           npx cap copy
           npx cap sync
 
-      - name: Setup JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+      - name: Setup JDK 21
+    uses: actions/setup-java@v4
+    with:
+    distribution: temurin
+    java-version: '21'
+
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
