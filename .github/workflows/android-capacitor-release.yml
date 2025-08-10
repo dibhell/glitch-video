@@ -1,6 +1,6 @@
 name: Build Android Release (Capacitor, signed)
 
-on:
+  on:
   workflow_dispatch:
     inputs:
       app_id:
