@@ -27,7 +27,8 @@ on:
         description: "Co budować: apk | aab | both"
         required: false
         default: "both"
- jobs:
+        
+jobs:
   build:
     runs-on: ubuntu-latest
     steps:
